@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Virtuelle Umgebung
+.venv/
+venv/
+
+# Lokale Konfiguration mit API-Schlüsseln – niemals einchecken!
+.env
+
+# Editor / Betriebssystem
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Testausgaben
+tests/output/

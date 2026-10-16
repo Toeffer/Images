@@ -1,0 +1,5 @@
+# Windows-Batchdateien brauchen CRLF, Shell-Skripte LF
+*.bat text eol=crlf
+*.sh text eol=lf
+*.webp binary
+*.png binary

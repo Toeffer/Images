@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Bildwerk</title>
+  <link rel="icon" href="static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="static/css/app.css">
+  <script type="module" src="static/js/main.js"></script>
+</head>
+<body>
+<div class="app" id="app">
+  <header class="topbar">
+    <div class="brand">
+      <img src="static/favicon.svg" alt="" width="22" height="22">
+      <span>Bildwerk</span>
+    </div>
+    <div class="group">
+      <button class="btn" data-command="new" title="Neues Bild (N)"><span data-icon="file-plus"></span><span class="label">Neu</span></button>
+      <button class="btn" data-command="open" title="Bild öffnen (Strg+O)"><span data-icon="folder"></span><span class="label">Öffnen</span></button>
+      <button class="btn" data-command="export" title="Speichern / Exportieren (Strg+S)" data-needs-doc><span data-icon="download"></span><span class="label">Speichern</span></button>
+    </div>
+    <div class="group">
+      <button class="icon-btn" data-command="undo" title="Rückgängig (Strg+Z)" data-needs-doc><span data-icon="undo"></span></button>
+      <button class="icon-btn" data-command="redo" title="Wiederholen (Strg+Y)" data-needs-doc><span data-icon="redo"></span></button>
+    </div>
+    <div class="group zoom">
+      <button class="icon-btn" data-command="zoom-out" title="Verkleinern (−)" data-needs-doc><span data-icon="zoom-out"></span></button>
+      <button class="zoom-label" data-command="zoom-100" title="Originalgröße 100 % (1)" data-needs-doc id="zoom-label">100 %</button>
+      <button class="icon-btn" data-command="zoom-in" title="Vergrößern (+)" data-needs-doc><span data-icon="zoom-in"></span></button>
+      <button class="icon-btn" data-command="zoom-fit" title="Ins Fenster einpassen (0)" data-needs-doc><span data-icon="fit"></span></button>
+    </div>
+    <div class="spacer"></div>
+    <button class="icon-btn" data-command="toggle-sidebar" title="Seitenleiste ein-/ausblenden" id="sidebar-toggle"><span data-icon="sidebar"></span></button>
+    <button class="icon-btn" data-command="settings" title="Einstellungen &amp; API-Schlüssel"><span data-icon="settings"></span></button>
+  </header>
+
+  <div class="tooloptions" id="tool-options">
+    <div class="opt-group" data-for="selection">
+      <span class="opt-label">Auswahl:</span>
+      <div class="segmented" id="sel-mode" role="radiogroup" aria-label="Auswahlmodus">
+        <button data-mode="new" title="Neue Auswahl" class="active">Neu</button>
+        <button data-mode="add" title="Zur Auswahl hinzufügen (Umschalt gedrückt halten)">+ Hinzufügen</button>
+        <button data-mode="subtract" title="Von Auswahl abziehen (Alt gedrückt halten)">− Abziehen</button>
+      </div>
+    </div>
+    <label class="opt-group" data-for="brush" title="Pinselgröße ([ und ])">
+      <span class="opt-label">Pinsel:</span>
+      <input type="range" id="brush-size" min="2" max="400" value="40">
+      <span class="opt-value" id="brush-size-value">40 px</span>
+    </label>
+    <label class="opt-group" data-for="selection" title="Weiche Auswahlkante">
+      <span class="opt-label">Weiche Kante:</span>
+      <input type="range" id="feather" min="0" max="100" value="0">
+      <span class="opt-value" id="feather-value">0 px</span>
+    </label>
+    <div class="opt-group">
+      <button class="chip" data-command="select-all" data-needs-doc title="Alles auswählen (Strg+A)"><span data-icon="select-all"></span>Alles</button>
+      <button class="chip" data-command="invert-selection" data-needs-doc title="Auswahl umkehren (Strg+Umschalt+I)"><span data-icon="invert"></span>Umkehren</button>
+      <button class="chip" data-command="deselect" data-needs-doc title="Auswahl aufheben (Strg+D)"><span data-icon="x"></span>Aufheben</button>
+    </div>
+  </div>
+
+  <nav class="toolbar" id="toolbar" aria-label="Werkzeuge">
+    <button class="tool" data-tool="move" title="Verschieben / Hand (V, Leertaste gedrückt halten)"><span data-icon="hand"></span></button>
+    <button class="tool active" data-tool="rect" title="Rechteck-Auswahl (M)"><span data-icon="rect"></span></button>
+    <button class="tool" data-tool="ellipse" title="Ellipsen-Auswahl (E)"><span data-icon="ellipse"></span></button>
+    <button class="tool" data-tool="lasso" title="Lasso – freie Auswahl (L)"><span data-icon="lasso"></span></button>
+    <button class="tool" data-tool="brush" title="Pinsel-Auswahl – Bereich übermalen (B)"><span data-icon="brush"></span></button>
+  </nav>
+
+  <main class="workspace">
+    <div class="tabs" id="tabs" role="tablist"></div>
+    <div class="viewport" id="viewport">
+      <canvas id="canvas-main"></canvas>
+      <canvas id="canvas-overlay"></canvas>
+
+      <div class="welcome" id="welcome">
+        <div class="welcome-card">
+          <img src="static/favicon.svg" alt="" width="56" height="56">
+          <h1>Willkommen bei Bildwerk</h1>
+          <p>Öffne ein Bild, um Bereiche auszuwählen, nachzuschärfen und zu bearbeiten – oder lass dir ein neues Bild von einer KI erzeugen.</p>
+          <div class="welcome-actions">
+            <button class="btn primary large" data-command="open"><span data-icon="folder"></span>Bild öffnen</button>
+            <button class="btn large" data-command="new"><span data-icon="file-plus"></span>Neues Bild</button>
+            <button class="btn ai large" data-command="ai-generate"><span data-icon="sparkles"></span>Mit KI generieren</button>
+          </div>
+          <p class="hint">Tipp: Bilder einfach hierher ziehen oder mit Strg+V einfügen.</p>
+        </div>
+      </div>
+
+      <div class="result-bar" id="result-bar" hidden>
+        <span class="result-title"><span data-icon="sparkles"></span><span id="result-label">KI-Ergebnis</span></span>
+        <button class="btn small" id="result-compare" title="Gedrückt halten, um das Original zu sehen"><span data-icon="eye"></span>Vorher</button>
+        <button class="btn small" id="result-retry" title="Noch einmal versuchen"><span data-icon="refresh"></span>Nochmal</button>
+        <button class="btn small" id="result-discard"><span data-icon="x"></span>Verwerfen</button>
+        <button class="btn small primary" id="result-accept"><span data-icon="check"></span>Übernehmen</button>
+      </div>
+
+      <div class="busy-overlay" id="busy-overlay" hidden>
+        <div class="busy-card">
+          <div class="spinner"></div>
+          <div class="busy-text" id="busy-text">Bitte warten …</div>
+          <div class="busy-time" id="busy-time"></div>
+          <button class="btn small" id="busy-cancel" hidden>Abbrechen</button>
+        </div>
+      </div>
+
+      <div class="drop-hint" id="drop-hint" hidden><div><span data-icon="image"></span>Bild hier ablegen</div></div>
+    </div>
+  </main>
+
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-tabs" role="tablist">
+      <button role="tab" data-panel="adjust" class="active"><span data-icon="sliders"></span>Bearbeiten</button>
+      <button role="tab" data-panel="ai"><span data-icon="sparkles"></span>KI</button>
+      <button role="tab" data-panel="history"><span data-icon="history"></span>Verlauf</button>
+    </div>
+    <section class="panel" id="panel-adjust" role="tabpanel"></section>
+    <section class="panel" id="panel-ai" role="tabpanel" hidden></section>
+    <section class="panel" id="panel-history" role="tabpanel" hidden></section>
+  </aside>
+
+  <footer class="statusbar">
+    <span id="status-size"></span>
+    <span id="status-selection"></span>
+    <span id="status-cursor"></span>
+    <span class="spacer"></span>
+    <span id="status-busy" class="status-busy" hidden><span class="spinner tiny"></span><span id="status-busy-text"></span></span>
+    <span id="status-zoom"></span>
+  </footer>
+</div>
+
+<input type="file" id="file-input" accept="image/*,.heic,.heif,.avif,.tif,.tiff,.webp" multiple hidden>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<dialog id="dlg-new" class="dialog">
+  <form method="dialog">
+    <h2>Neues Bild</h2>
+    <label class="row">Vorlage
+      <select name="preset">
+        <option value="1920x1080">Full HD – 1920 × 1080</option>
+        <option value="3840x2160">4K – 3840 × 2160</option>
+        <option value="1080x1080">Quadrat – 1080 × 1080</option>
+        <option value="1080x1350">Hochformat 4:5 – 1080 × 1350</option>
+        <option value="1080x1920">Story 9:16 – 1080 × 1920</option>
+        <option value="2480x3508">A4 bei 300 dpi – 2480 × 3508</option>
+        <option value="custom">Eigene Größe</option>
+      </select>
+    </label>
+    <div class="row two">
+      <label>Breite (px)<input type="number" name="width" min="1" max="20000" value="1920" required></label>
+      <label>Höhe (px)<input type="number" name="height" min="1" max="20000" value="1080" required></label>
+    </div>
+    <fieldset class="row">
+      <legend>Hintergrund</legend>
+      <label class="radio"><input type="radio" name="bg" value="#ffffff" checked> Weiß</label>
+      <label class="radio"><input type="radio" name="bg" value="#000000"> Schwarz</label>
+      <label class="radio"><input type="radio" name="bg" value="transparent"> Transparent</label>
+      <label class="radio"><input type="radio" name="bg" value="custom"> Farbe <input type="color" name="color" value="#4a6cf7"></label>
+    </fieldset>
+    <div class="dialog-actions">
+      <button value="cancel" class="btn" formnovalidate>Abbrechen</button>
+      <button value="ok" class="btn primary">Erstellen</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-export" class="dialog">
+  <form method="dialog">
+    <h2>Bild speichern</h2>
+    <label class="row">Dateiname
+      <input type="text" name="filename" required>
+    </label>
+    <label class="row">Format
+      <select name="format"></select>
+    </label>
+    <label class="row" data-quality>
+      <span class="row-head">Qualität <span class="opt-value" data-quality-value>92</span></span>
+      <input type="range" name="quality" min="40" max="100" value="92">
+    </label>
+    <p class="hint" data-alpha-hint hidden>Dieses Format unterstützt keine Transparenz – durchsichtige Bereiche werden weiß.</p>
+    <div class="dialog-actions">
+      <button value="cancel" class="btn" formnovalidate>Abbrechen</button>
+      <button value="ok" class="btn primary"><span data-icon="download"></span>Speichern</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-settings" class="dialog wide">
+  <form method="dialog">
+    <h2>Einstellungen</h2>
+    <p class="hint">Für die KI-Funktionen brauchst du einen API-Schlüssel bei mindestens einem Anbieter. Die Nutzung wird vom jeweiligen Anbieter abgerechnet. Schlüssel werden nur lokal auf diesem Rechner gespeichert.</p>
+    <div id="settings-providers"></div>
+    <p class="hint small" id="settings-path"></p>
+    <div class="dialog-actions">
+      <button value="close" class="btn primary">Schließen</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-confirm" class="dialog">
+  <form method="dialog">
+    <h2 data-title>Sicher?</h2>
+    <p data-text></p>
+    <div class="dialog-actions">
+      <button value="cancel" class="btn">Abbrechen</button>
+      <button value="ok" class="btn danger" data-ok>OK</button>
+    </div>
+  </form>
+</dialog>
+</body>
+</html>
