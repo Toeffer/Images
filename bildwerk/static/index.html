@@ -32,7 +32,7 @@
     </div>
     <div class="spacer"></div>
     <button class="icon-btn" data-command="toggle-sidebar" title="Seitenleiste ein-/ausblenden" id="sidebar-toggle"><span data-icon="sidebar"></span></button>
-    <button class="icon-btn" data-command="settings" title="Einstellungen &amp; API-Schlüssel"><span data-icon="settings"></span></button>
+    <button class="icon-btn" data-command="settings" title="Einstellungen: lokale KI &amp; API-Schlüssel"><span data-icon="settings"></span></button>
   </header>
 
   <div class="tooloptions" id="tool-options">
@@ -190,7 +190,11 @@
 <dialog id="dlg-settings" class="dialog wide">
   <form method="dialog">
     <h2>Einstellungen</h2>
-    <p class="hint">Für die KI-Funktionen brauchst du einen API-Schlüssel bei mindestens einem Anbieter. Die Nutzung wird vom jeweiligen Anbieter abgerechnet. Schlüssel werden nur lokal auf diesem Rechner gespeichert.</p>
+    <h3 class="section-title">Lokale KI auf diesem PC</h3>
+    <p class="hint">Kostenlos und ohne Internet – deine Bilder verlassen den Rechner nicht.</p>
+    <div id="settings-local"></div>
+    <h3 class="section-title">Cloud-Anbieter</h3>
+    <p class="hint">Brauchen einen API-Schlüssel; die Nutzung wird vom jeweiligen Anbieter abgerechnet. Schlüssel werden nur lokal auf diesem Rechner gespeichert.</p>
     <div id="settings-providers"></div>
     <p class="hint small" id="settings-path"></p>
     <div class="dialog-actions">

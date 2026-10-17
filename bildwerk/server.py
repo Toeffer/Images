@@ -7,10 +7,10 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import quote, urlsplit
 
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
@@ -19,6 +19,10 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from . import __version__
 from .ai import GenerateOptions, ProviderError, ProviderRegistry
+from .ai import comfyui_provider
+from .ai.comfy_workflows import WorkflowError, WorkflowLibrary
+from .ai.local.models import CATALOG as LOCAL_MODELS
+from .ai.local.runtime import onnxruntime_available
 from .ai.pipeline import ai_edit, ai_enhance
 from .document import ChangeInfo, Document, DocumentStore, Pending, VersionConflict
 from .engine import Change, NewImage, run_operation
@@ -56,8 +60,23 @@ class RenameRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
 
 
+class AiOptions(BaseModel):
+    """Zusatzeinstellungen lokaler Modelle (ComfyUI)."""
+
+    steps: int | None = Field(None, ge=1, le=150)
+    cfg: float | None = Field(None, ge=0, le=30)
+    denoise: float | None = Field(None, ge=0.05, le=1)
+    seed: int | None = Field(None, ge=0, le=4_294_967_294)
+    negative_prompt: str | None = Field(None, max_length=4000)
+
+
+# Kennung eines KI-Auftrags aus der Oberfläche, erlaubt gezieltes Abbrechen
+JobId = Annotated[str | None, Field(max_length=64, pattern=r"^[A-Za-z0-9_-]+$")]
+
+
 class GenerateRequest(BaseModel):
     provider: str
+    job_id: JobId = None
     prompt: str = Field(min_length=1, max_length=8000)
     model: str | None = None
     aspect_ratio: str = "1:1"
@@ -66,13 +85,16 @@ class GenerateRequest(BaseModel):
     negative_prompt: str | None = Field(None, max_length=4000)
     seed: int | None = Field(None, ge=0, le=4_294_967_294)
     count: int = Field(1, ge=1, le=4)
+    options: AiOptions = Field(default_factory=AiOptions)
 
 
 class AiEditRequest(BaseModel):
     provider: str
+    job_id: JobId = None
     prompt: str = Field(min_length=1, max_length=8000)
     model: str | None = None
     selection: Selection | None = None
+    options: AiOptions = Field(default_factory=AiOptions)
 
 
 class AiEnhanceRequest(BaseModel):
@@ -83,8 +105,16 @@ class AiEnhanceRequest(BaseModel):
     new_document: bool = False
 
 
+class CancelRequest(BaseModel):
+    job_id: JobId = None
+
+
 class ApiKeyRequest(BaseModel):
     api_key: str | None = Field(None, max_length=1000)
+
+
+class ComfyUrlRequest(BaseModel):
+    url: str | None = Field(None, max_length=300, pattern=r"^(https?://[^\s]+)?$")
 
 
 # -- Hilfsfunktionen ---------------------------------------------------------------------
@@ -111,6 +141,13 @@ def _pending_json(pending: Pending) -> dict[str, Any]:
 def _op_key(op_id: str, params: dict[str, Any], selection: Selection | None) -> str:
     payload = {"op": op_id, "params": params, "selection": selection.model_dump(mode="json") if selection else None}
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def _options(options: AiOptions, job_id: str | None) -> dict[str, Any]:
+    result = options.model_dump(exclude_none=True)
+    if job_id:
+        result["job_id"] = job_id
+    return result
 
 
 def _raw_response(image: Image.Image, meta: ImageMeta | None, version: int | None = None) -> Response:
@@ -164,6 +201,10 @@ def create_app(
     @app.exception_handler(VersionConflict)
     async def _conflict(request: Request, exc: VersionConflict):
         return JSONResponse({"detail": str(exc)}, status_code=409)
+
+    @app.exception_handler(WorkflowError)
+    async def _workflow_error(request: Request, exc: WorkflowError):
+        return JSONResponse({"detail": str(exc)}, status_code=400)
 
     def get_doc(doc_id: str) -> Document:
         try:
@@ -349,6 +390,7 @@ def create_app(
             negative_prompt=req.negative_prompt or None,
             seed=req.seed,
             count=req.count,
+            extra=_options(req.options, req.job_id),
         )
         images = provider.generate(opts)
         docs = []
@@ -363,7 +405,7 @@ def create_app(
         provider = registry.get(req.provider, "edit")
         with doc.lock:
             image, version = doc.image, doc.version
-        change = ai_edit(provider, image, req.selection, req.prompt, req.model)
+        change = ai_edit(provider, image, req.selection, req.prompt, req.model, options=_options(req.options, req.job_id))
         pending = doc.set_pending(change, f"KI: {_short(req.prompt, 28)}", version)
         if pending is None:
             raise VersionConflict("Das Bild wurde während der KI-Bearbeitung geändert. Bitte erneut versuchen.")
@@ -382,6 +424,78 @@ def create_app(
         if pending is None:
             raise VersionConflict("Das Bild wurde während der KI-Bearbeitung geändert. Bitte erneut versuchen.")
         return {"preview": _pending_json(pending)}
+
+    @app.get("/api/ai/providers")
+    def providers(refresh: bool = False) -> dict[str, Any]:
+        if refresh:
+            comfyui_provider.forget_probes()
+        return {"providers": registry.describe()}
+
+    @app.post("/api/ai/cancel")
+    def cancel_ai(req: CancelRequest | None = None) -> dict[str, int]:
+        return {"cancelled": comfyui_provider.cancel(registry.client, req.job_id if req else None)}
+
+    # -- Lokale KI ------------------------------------------------------------------------------
+    local_store = registry.context["local_store"]
+    workflows = WorkflowLibrary(settings.config_dir / "comfyui")
+
+    def local_status() -> dict[str, Any]:
+        return {
+            "available": onnxruntime_available(),
+            "device": local_store.device(),
+            "models": local_store.status(),
+            "directory": str(local_store.directory),
+        }
+
+    @app.get("/api/local")
+    def get_local() -> dict[str, Any]:
+        return local_status()
+
+    @app.post("/api/local/models/{model_id}/download")
+    def download_local_model(model_id: str) -> dict[str, Any]:
+        if model_id not in LOCAL_MODELS:
+            raise HTTPException(404, "Unbekanntes Modell.")
+        local_store.start_download(LOCAL_MODELS[model_id])
+        return local_status()
+
+    def comfy_status() -> dict[str, Any]:
+        info = comfyui_provider.ComfyUIProvider.availability(registry.context)
+        return {
+            **info["comfy"],
+            "configured_url": settings.get("comfyui_url"),
+            "status": info["status"],
+            "checkpoints": info["comfy"].get("checkpoints", []),
+        }
+
+    @app.get("/api/comfyui")
+    def get_comfyui(refresh: bool = False) -> dict[str, Any]:
+        if refresh:
+            comfyui_provider.forget_probes()
+        return comfy_status()
+
+    @app.put("/api/comfyui/url")
+    def set_comfyui_url(req: ComfyUrlRequest) -> dict[str, Any]:
+        settings.set("comfyui_url", (req.url or "").rstrip("/") or None)
+        comfyui_provider.forget_probes()
+        return comfy_status()
+
+    @app.post("/api/comfyui/workflows")
+    def add_workflow(file: UploadFile = File(...), name: str = Form("")) -> dict[str, Any]:
+        raw = file.file.read(5 * 1024 * 1024 + 1)
+        if len(raw) > 5 * 1024 * 1024:
+            raise HTTPException(413, "Die Workflow-Datei ist zu groß.")
+        try:
+            graph = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            raise HTTPException(400, "Die Datei ist kein gültiges JSON.") from None
+        title = name.strip() or _stem(file.filename or "Workflow")
+        workflow = workflows.add(title, graph)
+        return {"workflow": workflow.to_json(), **comfy_status()}
+
+    @app.delete("/api/comfyui/workflows/{workflow_id}")
+    def delete_workflow(workflow_id: str) -> dict[str, Any]:
+        workflows.remove(workflow_id)
+        return comfy_status()
 
     # -- Einstellungen -------------------------------------------------------------------------
     @app.get("/api/settings")

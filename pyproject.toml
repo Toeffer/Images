@@ -18,6 +18,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Lokale KI direkt in Bildwerk (KI-Schärfen mit Real-ESRGAN), unter Windows über DirectML auf der Grafikkarte
+local = [
+    "onnx>=1.16",
+    "onnxruntime-directml>=1.18; sys_platform == 'win32'",
+    "onnxruntime>=1.18; sys_platform != 'win32'",
+]
 # iPhone-Fotos (HEIC/HEIF) öffnen
 heic = ["pillow-heif>=0.16"]
 dev = ["pytest>=8", "playwright>=1.40"]

@@ -73,6 +73,20 @@ export const api = {
   generate: (request, signal) => json('POST', 'api/ai/generate', request, signal),
   aiEdit: (id, request, signal) => json('POST', doc(id, '/ai/edit'), request, signal),
   aiEnhance: (id, request, signal) => json('POST', doc(id, '/ai/enhance'), request, signal),
+  aiProviders: (refresh = false) => json('GET', `api/ai/providers${refresh ? '?refresh=1' : ''}`),
+  cancelAi: (jobId) => json('POST', 'api/ai/cancel', { job_id: jobId }),
+  local: () => json('GET', 'api/local'),
+  downloadLocalModel: (id) => json('POST', `api/local/models/${encodeURIComponent(id)}/download`),
+  comfyui: (refresh = false) => json('GET', `api/comfyui${refresh ? '?refresh=1' : ''}`),
+  setComfyUrl: (url) => json('PUT', 'api/comfyui/url', { url }),
+  async addWorkflow(file, name = '') {
+    const form = new FormData();
+    form.append('file', file, file.name || 'workflow.json');
+    form.append('name', name);
+    const response = await check(await fetch('api/comfyui/workflows', { method: 'POST', body: form }));
+    return response.json();
+  },
+  deleteWorkflow: (id) => json('DELETE', `api/comfyui/workflows/${encodeURIComponent(id)}`),
   settings: () => json('GET', 'api/settings'),
   saveKey: (provider, apiKey) => json('PUT', `api/settings/keys/${encodeURIComponent(provider)}`, { api_key: apiKey }),
 };

@@ -52,6 +52,11 @@ class Settings:
         self._lock = threading.Lock()
         self._data = self._load()
 
+    @property
+    def config_dir(self) -> Path:
+        """Ordner für Einstellungen, lokale Modelle und ComfyUI-Workflows."""
+        return self.path.parent
+
     def _load(self) -> dict[str, Any]:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))

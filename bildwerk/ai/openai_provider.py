@@ -92,7 +92,7 @@ class OpenAIProvider(Provider):
         response = self.post(f"{self.base_url}/images/generations", headers=self.headers, json=body)
         return self._images_from(self.json_of(response))
 
-    def edit(self, image: Image.Image, mask: Image.Image, prompt: str, model: str | None) -> Image.Image:
+    def edit(self, image: Image.Image, mask: Image.Image, prompt: str, model: str | None, options: dict | None = None) -> Image.Image:
         model = self.model_or_default(model)
         # OpenAI erwartet eine PNG-Maske, deren transparente Pixel den zu bearbeitenden Bereich markieren.
         alpha = ImageOps.invert(mask.convert("L"))

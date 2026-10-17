@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 
 import numpy as np
 import pytest
@@ -11,6 +12,9 @@ from bildwerk.ai import ProviderRegistry
 from bildwerk.ai.base import GenerateOptions, ModelOption, Provider
 from bildwerk.server import create_app
 from bildwerk.settings import Settings
+
+# Lokale Modelle in Tests immer auf der CPU rechnen – reproduzierbar, auch mit DirectML unter Windows
+os.environ.setdefault("BILDWERK_LOCAL_DEVICE", "cpu")
 
 
 def noise_image(width: int = 120, height: int = 80, mode: str = "RGB", seed: int = 0) -> Image.Image:
@@ -45,7 +49,7 @@ class FakeProvider(Provider):
         type(self).calls.append(("generate", opts))
         return [Image.new("RGB", (64, 48), (200, 30, 30)) for _ in range(opts.count)]
 
-    def edit(self, image, mask, prompt, model):
+    def edit(self, image, mask, prompt, model, options=None):
         type(self).calls.append(("edit", image.size, mask.size, prompt))
         return Image.new("RGB", image.size, (0, 255, 0))
 

@@ -115,6 +115,7 @@ def ai_edit(
     prompt: str,
     model: str | None,
     context_margin: float = CONTEXT_MARGIN,
+    options: dict | None = None,
 ) -> Change:
     """Bearbeitet die Auswahl per Text-Anweisung und mischt das Ergebnis weich ein."""
     width, height = image.size
@@ -133,7 +134,7 @@ def ai_edit(
     provider_mask = crop_mask.point(lambda v: 255 if v >= 8 else 0).resize((target_w, target_h), Image.Resampling.NEAREST)
     provider_mask = provider_mask.filter(ImageFilter.MaxFilter(5))
 
-    result = provider.edit(sent, provider_mask, prompt, model).convert("RGB")
+    result = provider.edit(sent, provider_mask, prompt, model, options=options).convert("RGB")
     result = result.resize(crop.size, Image.Resampling.LANCZOS)
     result = match_colors(result, crop, np.asarray(crop_mask) == 0)
 
@@ -160,7 +161,8 @@ def ai_enhance(
     sw, sh = sbox[2] - sbox[0], sbox[3] - sbox[1]
 
     if "upscale" in provider.capabilities:
-        work = _expand(sbox, 8, width, height)
+        # etwas Umgebung mitrechnen – die Netze brauchen Kontext über den Rand hinaus
+        work = _expand(sbox, 32, width, height)
         crop = image.crop(work).convert("RGB")
         prepared = _fit_limits(crop, provider.upscale_limits(upscale_model))
         if not as_new and prepared.width * 4 < crop.width:
@@ -176,7 +178,7 @@ def ai_enhance(
         restored = upscaled.resize(crop.size, Image.Resampling.LANCZOS)
         return blend_into(image, _with_alpha(restored.crop(rel), image, sbox), sbox, smask)
 
-    if "edit" not in provider.capabilities:
+    if "edit" not in provider.capabilities or not provider.enhance_via_edit:
         raise OperationError(f"{provider.name} unterstützt kein KI-Schärfen.")
     target_w, target_h = provider.edit_size(sw / sh, model)
     if not as_new:

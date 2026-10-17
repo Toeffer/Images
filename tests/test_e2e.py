@@ -6,11 +6,14 @@ Ein vorhandenes Chromium kann über PLAYWRIGHT_CHROMIUM_EXECUTABLE angegeben wer
 
 from __future__ import annotations
 
+import contextlib
 import io
+import json
 import os
 import socket
 import threading
 import time
+from pathlib import Path
 
 import httpx
 import pytest
@@ -26,22 +29,12 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-@pytest.fixture(scope="module")
-def server(tmp_path_factory):
+@contextlib.contextmanager
+def serve(app):
     import uvicorn
 
-    from bildwerk.ai import ProviderRegistry
-    from bildwerk.server import create_app
-    from bildwerk.settings import Settings
-
-    from .conftest import FakeProvider, FakeUpscaler
-
-    settings = Settings(config_dir=tmp_path_factory.mktemp("config"), environ={})
-    settings.set_api_key("fake", "test-key-123456")
-    registry = ProviderRegistry(settings, classes=(FakeProvider, FakeUpscaler))
     port = _free_port()
-    config = uvicorn.Config(create_app(settings=settings, registry=registry), host="127.0.0.1", port=port, log_level="warning")
-    uv = uvicorn.Server(config)
+    uv = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
     thread = threading.Thread(target=uv.run, daemon=True)
     thread.start()
     deadline = time.time() + 15
@@ -52,6 +45,53 @@ def server(tmp_path_factory):
     yield f"http://127.0.0.1:{port}/"
     uv.should_exit = True
     thread.join(timeout=5)
+
+
+@pytest.fixture(scope="module")
+def server(tmp_path_factory):
+    from bildwerk.ai import ProviderRegistry
+    from bildwerk.server import create_app
+    from bildwerk.settings import Settings
+
+    from .conftest import FakeProvider, FakeUpscaler
+
+    settings = Settings(config_dir=tmp_path_factory.mktemp("config"), environ={})
+    settings.set_api_key("fake", "test-key-123456")
+    registry = ProviderRegistry(settings, classes=(FakeProvider, FakeUpscaler))
+    with serve(create_app(settings=settings, registry=registry)) as url:
+        yield url
+
+
+@pytest.fixture(scope="module")
+def local_server(tmp_path_factory):
+    """Bildwerk mit lokalem Anbieter (Mini-Gewichte) und simuliertem ComfyUI."""
+    from bildwerk.ai import ProviderRegistry
+    from bildwerk.ai.comfyui_provider import ComfyUIProvider
+    from bildwerk.ai.local_provider import LocalProvider
+    from bildwerk.server import create_app
+    from bildwerk.settings import Settings
+
+    from .test_comfyui import FakeComfy
+
+    pytest.importorskip("onnxruntime")
+    fixtures = Path(__file__).parent / "fixtures"
+    weights = {"realesr-general-x4v3.pth": "tiny_srvgg.pth", "realesr-general-wdn-x4v3.pth": "tiny_srvgg_b.pth"}
+    comfy = FakeComfy(pending_polls=1)
+
+    def transport(request):
+        name = request.url.path.rsplit("/", 1)[-1]
+        if name in weights:
+            return httpx.Response(200, content=(fixtures / weights[name]).read_bytes())
+        if request.url.host == "comfy.test":
+            return comfy(request)
+        raise httpx.ConnectError("im Test nicht erreichbar")
+
+    settings = Settings(config_dir=tmp_path_factory.mktemp("config"), environ={})
+    settings.set("comfyui_url", "http://comfy.test:8188")
+    client = httpx.Client(transport=httpx.MockTransport(transport))
+    registry = ProviderRegistry(settings, client=client, classes=(LocalProvider, ComfyUIProvider))
+    with serve(create_app(settings=settings, registry=registry)) as url:
+        yield url, comfy
 
 
 @pytest.fixture(scope="module")
@@ -66,9 +106,9 @@ def browser():
         instance.close()
 
 
-@pytest.fixture
-def page(browser, server):
-    with httpx.Client(base_url=server) as http:  # sauberer Ausgangszustand
+@contextlib.contextmanager
+def open_app(browser, url):
+    with httpx.Client(base_url=url) as http:  # sauberer Ausgangszustand
         for doc in http.get("api/documents").json()["documents"]:
             http.delete(f"api/documents/{doc['id']}")
     context = browser.new_context(viewport={"width": 1400, "height": 900}, accept_downloads=True)
@@ -77,11 +117,26 @@ def page(browser, server):
     errors: list[str] = []
     pg.on("pageerror", lambda exc: errors.append(str(exc)))
     pg.on("console", lambda msg: msg.type == "error" and errors.append(msg.text))
-    pg.goto(server)
+    pg.goto(url)
     pg.wait_for_function("window.bildwerk && window.bildwerk.docs")
     yield pg
     context.close()
     assert not errors, errors
+
+
+@pytest.fixture
+def page(browser, server):
+    with open_app(browser, server) as pg:
+        yield pg
+
+
+@pytest.fixture
+def local_page(browser, local_server):
+    from bildwerk.ai import comfyui_provider
+
+    comfyui_provider._probe_cache.clear()
+    with open_app(browser, local_server[0]) as pg:
+        yield pg
 
 
 @pytest.fixture
@@ -189,3 +244,46 @@ def test_settings_dialog_configures_provider(page):
     page.click(".sidebar-tabs [data-panel=ai]")
     page.select_option("#panel-ai select >> nth=0", "fakeup")
     assert "Bereit" in page.locator("#panel-ai .ai-status").inner_text()
+
+
+def test_local_enhance_downloads_model(local_page, sample):
+    page = local_page
+    page.click(".sidebar-tabs [data-panel=ai]")
+    page.select_option("#panel-ai select >> nth=0", "local")
+    assert "Einmaliger Download" in page.locator("#panel-ai .card >> nth=1").inner_text()
+    open_image(page, sample)
+    drag(page, (150, 120), (300, 260))
+    page.click("#panel-ai .btn.ai")
+    page.wait_for_selector("#result-bar:not([hidden])", timeout=30000)
+    page.click("#result-accept")
+    page.wait_for_selector("#result-bar", state="hidden")
+    assert page.evaluate("bildwerk.docs.active.info.history.labels.at(-1)") == "KI-Schärfen"
+    page.wait_for_selector("#panel-ai .card >> text=Bereits geladen")  # Anzeige nach dem Download aktualisiert
+
+
+def test_comfyui_generate_and_workflow_import(local_page, local_server, tmp_path):
+    from .test_comfyui import ZIMAGE
+
+    page, comfy = local_page, local_server[1]
+    page.click(".sidebar-tabs [data-panel=ai]")
+    page.select_option("#panel-ai select >> nth=0", "comfyui")
+    assert "RTX 5060" in page.locator("#panel-ai .ai-status").inner_text()
+    page.fill("#panel-ai .card >> nth=1 >> input[type=number] >> nth=1", "12")  # Schritte
+    page.fill("#panel-ai textarea >> nth=0", "Ein Leuchtturm")
+    page.click("#panel-ai .btn.ai >> nth=0")
+    page.wait_for_selector(".tab.active:has-text('KI – Ein Leuchtturm')")
+    graph = comfy.graphs[-1]
+    assert graph["2"]["inputs"]["text"] == "Ein Leuchtturm" and graph["5"]["inputs"]["steps"] == 12
+
+    workflow = tmp_path / "Z-Image Turbo.json"
+    workflow.write_text(json.dumps(ZIMAGE))
+    page.click("[data-command=settings]")
+    page.wait_for_selector("#settings-local .provider-card >> text=Verbunden")
+    page.set_input_files("#settings-local input[type=file]", str(workflow))
+    page.wait_for_selector("#settings-local .model-row:has-text('Z-Image Turbo')")
+    page.click("#dlg-settings button[value=close]")
+    assert page.locator("#panel-ai .card >> nth=1 >> select[aria-label=Modell]").input_value().startswith("wf:z-image-turbo")
+    page.fill("#panel-ai textarea >> nth=0", "Ein Fuchs im Schnee")
+    page.click("#panel-ai .btn.ai >> nth=0")
+    page.wait_for_selector(".tab.active:has-text('KI – Ein Fuchs im Schnee')")
+    assert comfy.graphs[-1]["45"]["inputs"]["text"] == "Ein Fuchs im Schnee"

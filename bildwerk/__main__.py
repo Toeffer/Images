@@ -28,7 +28,8 @@ def _find_free_port(host: str, start: int, attempts: int = 20) -> int:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="bildwerk", description="Bildwerk – Bildbearbeitung im Browser")
     parser.add_argument("--host", default="127.0.0.1", help="Adresse (Standard: 127.0.0.1, nur dieser Rechner)")
-    parser.add_argument("--port", type=int, default=8000, help="Port (Standard: 8000, sonst der nächste freie)")
+    # nicht 8000: den Port belegt ComfyUI Desktop
+    parser.add_argument("--port", type=int, default=8765, help="Port (Standard: 8765, sonst der nächste freie)")
     parser.add_argument("--no-browser", action="store_true", help="Browser nicht automatisch öffnen")
     parser.add_argument("--version", action="version", version=f"Bildwerk {__version__}")
     args = parser.parse_args(argv)

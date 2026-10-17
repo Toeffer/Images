@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
 import httpx
@@ -42,6 +42,7 @@ class GenerateOptions:
     negative_prompt: str | None = None
     seed: int | None = None
     count: int = 1
+    extra: dict[str, Any] = field(default_factory=dict)  # anbieterspezifisch, z. B. Schritte bei ComfyUI
 
 
 def png_bytes(img: Image.Image) -> bytes:
@@ -89,16 +90,27 @@ class Provider:
     max_count: ClassVar[int] = 4
     timeout: ClassVar[float] = 240.0
     note: ClassVar[str] = ""
+    requires_key: ClassVar[bool] = True  # False: lokaler Anbieter ohne API-Schlüssel
+    local: ClassVar[bool] = False  # rechnet auf diesem Computer
+    enhance_via_edit: ClassVar[bool] = True  # KI-Schärfen über eine Bearbeitungs-Anweisung erlaubt
 
-    def __init__(self, api_key: str, client: httpx.Client) -> None:
+    def __init__(self, api_key: str | None, client: httpx.Client, **context: Any) -> None:
         self.api_key = api_key
         self.client = client
+        self.context = context  # gemeinsame Ressourcen der Registry (Einstellungen, lokale Modelle …)
+
+    @classmethod
+    def availability(cls, context: dict[str, Any]) -> dict[str, Any]:
+        """Zustand eines Anbieters ohne API-Schlüssel; darf Felder von :meth:`describe` überschreiben."""
+        return {"configured": True, "status": ""}
 
     # -- Schnittstelle -----------------------------------------------------------------
     def generate(self, opts: GenerateOptions) -> list[Image.Image]:
         raise ProviderError(f"{self.name} kann keine Bilder generieren.", 400)
 
-    def edit(self, image: Image.Image, mask: Image.Image, prompt: str, model: str | None) -> Image.Image:
+    def edit(
+        self, image: Image.Image, mask: Image.Image, prompt: str, model: str | None, options: dict[str, Any] | None = None
+    ) -> Image.Image:
         """Bearbeitet ``image`` (RGB). ``mask`` (Modus L): 255 = darf verändert werden."""
         raise ProviderError(f"{self.name} kann keine Bilder bearbeiten.", 400)
 
@@ -123,6 +135,9 @@ class Provider:
             "id": cls.id,
             "name": cls.name,
             "capabilities": [c for c in ("generate", "edit", "upscale") if c in cls.capabilities],
+            "enhance": "upscale" in cls.capabilities or ("edit" in cls.capabilities and cls.enhance_via_edit),
+            "requires_key": cls.requires_key,
+            "local": cls.local,
             "models": [m.to_json() for m in cls.models],
             "default_model": cls.default_model,
             "aspect_ratios": list(cls.aspect_ratios),

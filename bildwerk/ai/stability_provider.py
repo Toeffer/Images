@@ -92,7 +92,7 @@ class StabilityProvider(Provider):
         }
         return [self._request(path, fields) for _ in range(max(1, min(self.max_count, opts.count)))]
 
-    def edit(self, image: Image.Image, mask: Image.Image, prompt: str, model: str | None) -> Image.Image:
+    def edit(self, image: Image.Image, mask: Image.Image, prompt: str, model: str | None, options: dict | None = None) -> Image.Image:
         fields = {"prompt": prompt, "output_format": "png", "grow_mask": 5}
         return self._request(
             "/v2beta/stable-image/edit/inpaint", fields, {"image": image.convert("RGB"), "mask": mask.convert("L")}

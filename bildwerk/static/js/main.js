@@ -176,6 +176,7 @@ function showPanel(id) {
   for (const button of $$('.sidebar-tabs [data-panel]')) button.classList.toggle('active', button.dataset.panel === id);
   for (const panel of $$('.sidebar .panel')) panel.hidden = panel.id !== `panel-${id}`;
   storage.set('panel', id);
+  app.emit('panel', { id });
   const appEl = $('#app');
   if (appEl.classList.contains('sidebar-hidden')) appEl.classList.remove('sidebar-hidden');
   if (matchMedia('(max-width: 900px)').matches) appEl.classList.add('sidebar-open');

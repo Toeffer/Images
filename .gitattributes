@@ -3,3 +3,5 @@
 *.sh text eol=lf
 *.webp binary
 *.png binary
+*.pth binary
+*.npz binary

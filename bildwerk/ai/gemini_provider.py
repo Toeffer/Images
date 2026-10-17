@@ -94,7 +94,7 @@ class GeminiProvider(Provider):
             for _ in range(max(1, min(self.max_count, opts.count)))
         ]
 
-    def edit(self, image: Image.Image, mask: Image.Image, prompt: str, model: str | None) -> Image.Image:
+    def edit(self, image: Image.Image, mask: Image.Image, prompt: str, model: str | None, options: dict | None = None) -> Image.Image:
         model = self.model_or_default(model)
         parts: list[dict[str, Any]] = [{"text": prompt + MASK_HINT}, _inline(image.convert("RGB"))]
         parts.append(_inline(mask.convert("L")))

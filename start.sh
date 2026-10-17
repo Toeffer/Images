@@ -11,13 +11,17 @@ if ! command -v "$PYTHON" >/dev/null 2>&1; then
 fi
 
 if [ ! -x .venv/bin/python ]; then
-  echo "Richte Bildwerk ein (einmalig, dauert etwa eine Minute) ..."
+  echo "Richte Bildwerk ein (einmalig, dauert ein bis zwei Minuten) ..."
   "$PYTHON" -m venv .venv
 fi
 
 if [ ! -f .venv/.installed ] || [ pyproject.toml -nt .venv/.installed ]; then
   .venv/bin/python -m pip install --upgrade pip
   .venv/bin/python -m pip install -e .
+  # Lokale KI (ONNX Runtime) ist optional, Bildwerk laeuft auch ohne
+  if ! .venv/bin/python -m pip install -e ".[local]"; then
+    echo "Hinweis: Die lokale KI liess sich nicht installieren - Bildwerk startet ohne KI-Schaerfen auf diesem Rechner." >&2
+  fi
   touch .venv/.installed
 fi
 

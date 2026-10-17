@@ -137,17 +137,167 @@ const CAPABILITIES = { generate: 'Bilder generieren', edit: 'Bereiche bearbeiten
 
 export async function openSettingsDialog(app) {
   const dialog = $('#dlg-settings');
-  const box = $('#settings-providers');
+  const cloudBox = $('#settings-providers');
+  const localBox = $('#settings-local');
   let data;
+  let local = null;
+  let comfy = null;
   try {
-    data = await api.settings();
+    [data, local, comfy] = await Promise.all([api.settings(), api.local().catch(() => null), api.comfyui().catch(() => null)]);
   } catch (err) {
     showError(err);
     return;
   }
+  let open = true;
+  let pollTimer = null;
 
-  const render = () => {
-    box.replaceChildren(...data.providers.map((p) => providerCard(p)));
+  // Das KI-Panel soll Änderungen sofort sehen
+  const refreshProviders = async () => {
+    try {
+      const { providers } = await api.aiProviders();
+      data.providers = providers;
+      app.emit('providers', { providers });
+    } catch {
+      /* egal – beim nächsten Öffnen */
+    }
+  };
+
+  // -- Lokale KI ------------------------------------------------------------------------------
+  const pollDownloads = () => {
+    clearTimeout(pollTimer);
+    if (!open || !local?.models.some((m) => m.progress != null)) return;
+    pollTimer = setTimeout(async () => {
+      try {
+        const before = local.models.filter((m) => m.installed).length;
+        local = await api.local();
+        renderLocal();
+        if (local.models.filter((m) => m.installed).length !== before) refreshProviders();
+      } catch {
+        /* nächster Versuch */
+      }
+      pollDownloads();
+    }, 700);
+  };
+
+  const download = async (model) => {
+    try {
+      local = await api.downloadLocalModel(model.id);
+      renderLocal();
+      pollDownloads();
+    } catch (err) {
+      showError(err);
+    }
+  };
+
+  const localCard = () => {
+    if (!local) return null;
+    const rows = local.models.map((m) => {
+      let state;
+      if (m.installed) state = el('span', { class: 'badge ok' }, icon('check'), 'Geladen');
+      else if (m.progress != null) state = el('span', { class: 'badge' }, el('span', { class: 'spinner tiny' }), `${Math.round(m.progress * 100)} %`);
+      else state = el('button', { type: 'button', class: 'btn small', disabled: !local.available, onclick: () => download(m) }, icon('download'), `Laden (${formatSize(m.size_mb)})`);
+      return el('div', { class: 'model-row' },
+        el('div', { class: 'model-info' },
+          el('strong', {}, m.label),
+          el('div', { class: 'hint' }, m.description),
+          m.error ? el('div', { class: 'error-text' }, m.error) : null),
+        state);
+    });
+    return el('div', { class: 'provider-card' },
+      el('div', { class: 'head' },
+        el('span', { class: `dot${local.available ? ' ok' : ''}` }),
+        el('strong', {}, 'KI-Schärfen (Real-ESRGAN)')),
+      el('p', { class: 'hint' }, local.available
+        ? `Rechnet auf: ${local.device}. Die Modelle werden beim ersten Schärfen automatisch geladen – oder hier schon vorab.`
+        : 'Das Paket „onnxruntime“ fehlt. start.bat bzw. start.sh erneut ausführen; klappt die Installation nicht, Python 3.12 bis 3.14 verwenden (für ganz neue Python-Versionen gibt es ONNX Runtime oft noch nicht).'),
+      rows,
+      el('div', { class: 'hint small path' }, `Modellordner: ${local.directory}`));
+  };
+
+  // -- ComfyUI --------------------------------------------------------------------------------
+  const comfyAction = async (call, message) => {
+    try {
+      const result = await call();
+      comfy = result;
+      renderLocal();
+      refreshProviders();
+      if (message) toast(typeof message === 'function' ? message(result) : message, 'success', 2500);
+    } catch (err) {
+      showError(err);
+    }
+  };
+
+  const comfyCard = () => {
+    if (!comfy) return null;
+    const urlInput = el('input', {
+      type: 'text',
+      value: comfy.configured_url || '',
+      spellcheck: 'false',
+      placeholder: `automatisch (${comfy.url})`,
+      'aria-label': 'Adresse von ComfyUI',
+      onkeydown: (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          saveUrl();
+        }
+      },
+    });
+    const saveUrl = () => comfyAction(() => api.setComfyUrl(urlInput.value.trim() || null),
+      (result) => (result.reachable ? 'ComfyUI ist verbunden.' : 'Adresse gespeichert – ComfyUI ist dort aber nicht erreichbar.'));
+    const fileInput = el('input', {
+      type: 'file',
+      accept: '.json,application/json',
+      hidden: true,
+      onchange: (e) => {
+        const file = e.target.files[0];
+        e.target.value = '';
+        if (file) comfyAction(() => api.addWorkflow(file), (result) => `Workflow „${result.workflow.name}“ importiert.`);
+      },
+    });
+    const workflows = comfy.workflows.map((w) => el('div', { class: 'model-row' },
+      el('div', { class: 'model-info' },
+        el('strong', {}, w.name),
+        el('div', { class: 'hint' }, `${w.kind === 'generate' ? 'Generieren' : 'Bearbeiten'} · ${w.summary.join(' · ')}`)),
+      el('button', {
+        type: 'button',
+        class: 'btn small',
+        title: 'Workflow entfernen',
+        'aria-label': `Workflow ${w.name} entfernen`,
+        onclick: () => comfyAction(() => api.deleteWorkflow(w.id)),
+      }, icon('x'))));
+    let models = null;
+    if (comfy.reachable) {
+      models = comfy.checkpoints.length
+        ? `Gefundene Checkpoint-Modelle: ${comfy.checkpoints.join(', ')}`
+        : 'Keine Checkpoint-Modelle gefunden (Ordner ComfyUI/models/checkpoints). Modelle wie Z-Image oder FLUX nutzt du über einen importierten Workflow.';
+    }
+    const status = comfy.reachable
+      ? comfy.status
+      : `Nicht erreichbar unter ${comfy.url}. Starte ComfyUI – Bildwerk sucht es automatisch unter 127.0.0.1:8000, :8001 und :8188. Läuft es woanders, trage hier die Adresse ein.`;
+    return el('div', { class: 'provider-card' },
+      el('div', { class: 'head' },
+        el('span', { class: `dot${comfy.reachable ? ' ok' : ''}` }),
+        el('strong', {}, 'ComfyUI – Generieren & Bearbeiten'),
+        el('button', { type: 'button', class: 'icon-btn small', title: 'Erneut prüfen', 'aria-label': 'Verbindung erneut prüfen', onclick: () => comfyAction(() => api.comfyui(true)) }, icon('refresh'))),
+      el('p', { class: 'hint' }, status),
+      el('div', { class: 'key-row' },
+        urlInput,
+        el('button', { type: 'button', class: 'btn', onclick: saveUrl }, 'Übernehmen')),
+      models ? el('p', { class: 'hint' }, models) : null,
+      el('div', { class: 'section-head' },
+        el('strong', {}, 'Eigene Workflows'),
+        el('button', { type: 'button', class: 'btn small', onclick: () => fileInput.click() }, icon('file-plus'), 'Importieren …'),
+        fileInput),
+      workflows.length ? workflows : el('p', { class: 'hint' }, 'In ComfyUI über „Workflow → Export (API)“ speichern und hier importieren. Bildwerk setzt Beschreibung, Format und Seed selbst ein.'));
+  };
+
+  const renderLocal = () => {
+    localBox.replaceChildren(...[localCard(), comfyCard()].filter(Boolean));
+  };
+
+  // -- Cloud-Anbieter ---------------------------------------------------------------------------
+  const renderCloud = () => {
+    cloudBox.replaceChildren(...data.providers.filter((p) => p.requires_key).map((p) => providerCard(p)));
     $('#settings-path').textContent = `Gespeichert in: ${data.config_path}`;
   };
 
@@ -155,7 +305,7 @@ export async function openSettingsDialog(app) {
     try {
       data = await api.saveKey(provider.id, key);
       app.emit('providers', { providers: data.providers });
-      render();
+      renderCloud();
       toast(key ? `Schlüssel für ${provider.name} gespeichert.` : `Schlüssel für ${provider.name} entfernt.`, 'success', 2500);
     } catch (err) {
       showError(err);
@@ -195,6 +345,14 @@ export async function openSettingsDialog(app) {
         el('a', { href: p.key_url, target: '_blank', rel: 'noopener noreferrer' }, 'Schlüssel erstellen ↗')));
   };
 
-  render();
+  renderLocal();
+  renderCloud();
+  pollDownloads();
   await show(dialog);
+  open = false;
+  clearTimeout(pollTimer);
+}
+
+function formatSize(mb) {
+  return `${mb.toLocaleString('de-DE', { maximumFractionDigits: 1 })} MB`;
 }
